@@ -29,8 +29,12 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -48,9 +52,11 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Restore
-import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Swipe
+import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,8 +64,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -80,23 +88,81 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
-internal fun Header(page: Page, count: Int, album: String?, onBack: () -> Unit) {
+internal fun Header(page: Page, count: Int, album: String?, onSettings: () -> Unit, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         if (album != null || page == Page.Albums) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
         Column(Modifier.weight(1f)) {
             Text(when { album != null -> album; page == Page.Photos -> "Your gallery"; page == Page.Albums -> "Albums"; page == Page.Swipe -> "Quick sort"; else -> "Recently deleted" }, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
-            Text(when { album != null -> "ALBUM"; page == Page.Photos -> "$count photos · all memories"; page == Page.Albums -> "YOUR COLLECTIONS"; page == Page.Swipe -> "A LITTLE TIDY, ONE SWIPE AT A TIME"; else -> "RESTORE WITHIN 30 DAYS" }, fontSize = 10.sp, letterSpacing = 1.2.sp, color = Muted, fontWeight = FontWeight.SemiBold)
+            Text(when { album != null -> "ALBUM"; page == Page.Photos -> "$count items · all memories"; page == Page.Albums -> "YOUR COLLECTIONS"; page == Page.Swipe -> "A LITTLE TIDY, ONE SWIPE AT A TIME"; else -> "RESTORE WITHIN 30 DAYS" }, fontSize = 10.sp, letterSpacing = 1.2.sp, color = Muted, fontWeight = FontWeight.SemiBold)
         }
-        Box(Modifier.size(42.dp).clip(CircleShape).background(Color(0xFFE6EFE9)), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Security, "On device", tint = Green, modifier = Modifier.size(21.dp)) }
+        IconButton(onClick = onSettings, modifier = Modifier.size(42.dp).clip(CircleShape).background(Color(0xFFE6EFE9))) {
+            Icon(Icons.Rounded.Settings, "Settings", tint = Green, modifier = Modifier.size(21.dp))
+        }
     }
 }
 
 @Composable
-internal fun PhotoGrid(photos: List<Photo>, onPhoto: (Photo) -> Unit, empty: Boolean) {
-    if (photos.isEmpty() && empty) { EmptyState(Icons.Rounded.Image, "A fresh start", "Your photos will show up here once gallery access is on.", null); return }
-    LazyVerticalGrid(columns = GridCells.Fixed(3), contentPadding = PaddingValues(start = 3.dp, end = 3.dp, bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { Text("ALL PHOTOS  ·  ${photos.size} ITEMS", Modifier.padding(horizontal = 18.dp, vertical = 9.dp), fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold, color = Muted) }
-        items(photos, key = { it.id }) { photo -> GalleryImage(photo.uri, photo.name, Modifier.aspectRatio(1f).clip(RoundedCornerShape(5.dp)).clickable { onPhoto(photo) }) }
+internal fun MediaFilterBar(selected: MediaFilter, count: Int, onFilter: (MediaFilter) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 2.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("$count ITEMS", Modifier.weight(1f), fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold, color = Muted)
+        Row(Modifier.clip(RoundedCornerShape(50)).background(Color(0xFFEAEAE6)).padding(3.dp)) {
+            MediaFilter.entries.forEach { filter ->
+                val active = filter == selected
+                Text(
+                    filter.label,
+                    Modifier.clip(RoundedCornerShape(50)).background(if (active) Card else Color.Transparent).clickable { onFilter(filter) }.padding(horizontal = 13.dp, vertical = 6.dp),
+                    fontSize = 12.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (active) Green else Muted
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun VideoBadge(durationMs: Long, modifier: Modifier = Modifier) {
+    Row(modifier.clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(.55f)).padding(horizontal = 5.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Rounded.PlayArrow, "Video", tint = Color.White, modifier = Modifier.size(13.dp))
+        if (durationMs > 0) Text(formatDuration(durationMs), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+internal fun PhotoGrid(
+    photos: List<Photo>,
+    filter: MediaFilter,
+    onFilter: (MediaFilter) -> Unit,
+    selectedIds: Set<Long>,
+    onPhoto: (Photo) -> Unit,
+    onLongPress: (Photo) -> Unit,
+    empty: Boolean,
+) {
+    val selecting = selectedIds.isNotEmpty()
+    Column(Modifier.fillMaxSize()) {
+        MediaFilterBar(filter, photos.size, onFilter)
+        if (photos.isEmpty() && empty) {
+            when (filter) {
+                MediaFilter.All -> EmptyState(Icons.Rounded.Image, "A fresh start", "Your photos and videos will show up here once gallery access is on.", null)
+                MediaFilter.Photos -> EmptyState(Icons.Rounded.Image, "No photos here", "Photos you take or save will show up here.", null)
+                MediaFilter.Videos -> EmptyState(Icons.Rounded.Videocam, "No videos here", "Videos you record or save will show up here.", null)
+            }
+        } else {
+            LazyVerticalGrid(columns = GridCells.Fixed(3), contentPadding = PaddingValues(start = 3.dp, end = 3.dp, bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                items(photos, key = { it.id }) { photo ->
+                    val selected = photo.id in selectedIds
+                    val inset by animateFloatAsState(if (selected) .86f else 1f, label = "selection inset")
+                    Box(Modifier.aspectRatio(1f).background(if (selected) Color(0xFFE6EFE9) else Color.Transparent).combinedClickable(onLongClick = { onLongPress(photo) }) { onPhoto(photo) }) {
+                        Box(Modifier.fillMaxSize().graphicsLayer { scaleX = inset; scaleY = inset }.clip(RoundedCornerShape(if (selected) 10.dp else 5.dp))) {
+                            GalleryImage(photo.uri, photo.name, Modifier.fillMaxSize())
+                            if (photo.isVideo) VideoBadge(photo.durationMs, Modifier.align(Alignment.BottomEnd).padding(5.dp))
+                        }
+                        if (selecting) SelectionMark(selected, Modifier.align(Alignment.TopEnd).padding(6.dp))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -109,7 +175,7 @@ internal fun Albums(photos: List<Photo>, onAlbum: (String) -> Unit) {
             Column(Modifier.clickable { onAlbum(name) }) {
                 GalleryImage(items.first().uri, name, Modifier.fillMaxWidth().aspectRatio(0.92f).clip(RoundedCornerShape(18.dp)))
                 Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("${items.size} photos", fontSize = 12.sp, color = Muted) }
+                    Column(Modifier.weight(1f)) { Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("${items.size} items", fontSize = 12.sp, color = Muted) }
                     Icon(Icons.Rounded.ChevronRight, null, tint = Muted)
                 }
             }
@@ -118,7 +184,7 @@ internal fun Albums(photos: List<Photo>, onAlbum: (String) -> Unit) {
 }
 
 @Composable
-internal fun SwipePage(photos: List<Photo>, onKeep: (Photo) -> Unit, onTrash: (Photo) -> Unit) {
+internal fun SwipePage(photos: List<Photo>, onKeep: (Photo) -> Unit, onTrash: (Photo) -> Unit, onOpen: (Photo) -> Unit) {
     var selectedAlbum by remember { mutableStateOf<String?>(null) }
     var albumMenuOpen by remember { mutableStateOf(false) }
     val albums = remember(photos) { photos.groupBy { it.album }.toList().sortedByDescending { it.second.size } }
@@ -171,7 +237,10 @@ internal fun SwipePage(photos: List<Photo>, onKeep: (Photo) -> Unit, onTrash: (P
         if (current != null) {
             Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = 14.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp).clip(RoundedCornerShape(30.dp)).background(Color(0xFFE6E5DF)))
-                Box(Modifier.fillMaxSize().offset { IntOffset(drag.roundToInt(), 0) }.rotate(rotation).clip(RoundedCornerShape(30.dp)).background(Card).pointerInput(current.id) {
+                Box(Modifier.fillMaxSize().offset { IntOffset(drag.roundToInt(), 0) }.rotate(rotation).clip(RoundedCornerShape(30.dp)).background(Card).pointerInput(current.id, "tap") {
+                    // A drag consumes the pointer, so this only fires for a clean tap.
+                    detectTapGestures(onTap = { if (!settling) onOpen(current) })
+                }.pointerInput(current.id) {
                     detectDragGestures(onDragEnd = {
                         if (settling) return@detectDragGestures
                         val decision = when { drag > 120 -> 1; drag < -120 -> -1; else -> 0 }
@@ -202,6 +271,7 @@ internal fun SwipePage(photos: List<Photo>, onKeep: (Photo) -> Unit, onTrash: (P
                     }
                 }) {
                     GalleryImage(current.uri, current.name, Modifier.fillMaxSize())
+                    if (current.isVideo) VideoBadge(current.durationMs, Modifier.align(Alignment.BottomEnd).padding(22.dp))
                     if (drag > 35) SwipeStamp("KEEP", Green, Modifier.align(Alignment.TopStart).padding(22.dp).rotate(-12f))
                     if (drag < -35) SwipeStamp("TRASH", Coral, Modifier.align(Alignment.TopEnd).padding(22.dp).rotate(12f))
                     Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).height(130.dp).background(Color.Black.copy(alpha = .42f)))
@@ -211,7 +281,7 @@ internal fun SwipePage(photos: List<Photo>, onKeep: (Photo) -> Unit, onTrash: (P
                     }
                 }
             }
-            Text("SWIPE RIGHT TO KEEP  ·  LEFT TO TRASH", fontSize = 9.sp, letterSpacing = 1.1.sp, color = Muted, fontWeight = FontWeight.Bold)
+            Text("TAP TO VIEW  ·  RIGHT TO KEEP  ·  LEFT TO TRASH", fontSize = 9.sp, letterSpacing = 1.1.sp, color = Muted, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(14.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 RoundAction(Icons.Rounded.DeleteOutline, "Move to trash", Coral) { onTrash(current); queue.remove(current) }
@@ -252,7 +322,10 @@ internal fun TrashPage(photos: List<Photo>, onRestore: (Photo) -> Unit, onDelete
         LazyVerticalGrid(columns = GridCells.Fixed(2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(photos, key = { it.id }) { photo ->
                 Column(Modifier.clip(RoundedCornerShape(16.dp)).background(Card)) {
-                    GalleryImage(photo.uri, photo.name, Modifier.fillMaxWidth().aspectRatio(1f))
+                    Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+                        GalleryImage(photo.uri, photo.name, Modifier.fillMaxSize())
+                        if (photo.isVideo) VideoBadge(photo.durationMs, Modifier.align(Alignment.BottomEnd).padding(6.dp))
+                    }
                     Text(photo.name, Modifier.padding(start = 11.dp, end = 11.dp, top = 9.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     Row(Modifier.fillMaxWidth().padding(horizontal = 5.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                         TextButton(onClick = { onRestore(photo) }) { Icon(Icons.Rounded.Restore, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(3.dp)); Text("Restore", fontSize = 11.sp) }
@@ -265,89 +338,108 @@ internal fun TrashPage(photos: List<Photo>, onRestore: (Photo) -> Unit, onDelete
 }
 
 @Composable
-internal fun PhotoDetail(initialPhoto: Photo, photos: List<Photo>, onClose: () -> Unit, onTrash: (Photo) -> Unit) {
-    var index by remember(photos, initialPhoto.id) {
-        mutableIntStateOf(photos.indexOfFirst { it.id == initialPhoto.id }.coerceAtLeast(0))
+internal fun ViewerItem(item: Photo, modifier: Modifier, onPlay: (() -> Unit)?) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        GalleryImage(item.uri, item.name, Modifier.fillMaxSize(), ContentScale.Fit)
+        if (item.isVideo) {
+            FilledIconButton(
+                onClick = { onPlay?.invoke() },
+                enabled = onPlay != null,
+                modifier = Modifier.size(72.dp),
+                shape = CircleShape,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = Color.Black.copy(.5f), contentColor = Color.White,
+                    disabledContainerColor = Color.Black.copy(.5f), disabledContentColor = Color.White
+                )
+            ) { Icon(Icons.Rounded.PlayArrow, "Play video", modifier = Modifier.size(40.dp)) }
+        }
     }
-    var dragOffset by remember { mutableFloatStateOf(0f) }
-    var settling by remember { mutableStateOf(false) }
+}
+
+@Composable
+internal fun PhotoDetail(initialPhoto: Photo, photos: List<Photo>, onClose: () -> Unit, onPlay: (Photo) -> Unit, onTrash: (Photo) -> Unit) {
+    val pagerState = rememberPagerState(initialPage = photos.indexOfFirst { it.id == initialPhoto.id }.coerceAtLeast(0)) { photos.size }
     val scope = rememberCoroutineScope()
+    // Vertical offset of the current item while it is being swiped up to the bin.
+    var liftY by remember { mutableFloatStateOf(0f) }
+    var removing by remember { mutableStateOf(false) }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
-        val photo = photos.getOrNull(index) ?: initialPhoto
-        val previous = photos.getOrNull(index - 1)
-        val next = photos.getOrNull(index + 1)
+        val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
+        val currentIndex = pagerState.currentPage.coerceIn(0, (photos.size - 1).coerceAtLeast(0))
+        val photo = photos.getOrNull(currentIndex) ?: initialPhoto
 
-        fun settleTo(direction: Int) {
-            if (settling) return
-            val targetIndex = (index + direction).takeIf { direction != 0 && it in photos.indices } ?: index
-            val targetOffset = when {
-                targetIndex > index -> -widthPx
-                targetIndex < index -> widthPx
-                else -> 0f
-            }
-            settling = true
+        fun springBack() {
+            scope.launch { Animatable(liftY).animateTo(0f, spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)) { liftY = value } }
+        }
+        fun trashCurrent() {
+            if (removing) return
+            val target = photo
+            removing = true
             scope.launch {
-                val motion = Animatable(dragOffset)
-                motion.animateTo(
-                    targetOffset,
-                    spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)
-                ) { dragOffset = value }
-                if (targetIndex != index) index = targetIndex
-                dragOffset = 0f
-                settling = false
+                Animatable(liftY).animateTo(-heightPx, tween(220, easing = FastOutSlowInEasing)) { liftY = value }
+                onTrash(target)
+                // The pager keeps its index, so the next item slides into this slot (or the previous one if this was the last).
+                liftY = 0f
+                removing = false
             }
         }
 
         Box(
-            Modifier.fillMaxSize().pointerInput(index, widthPx) {
-                detectHorizontalDragGestures(
-                    onDragStart = { if (!settling) dragOffset = 0f },
+            Modifier.fillMaxSize().pointerInput(photo.id, heightPx) {
+                val tracker = VelocityTracker()
+                detectVerticalDragGestures(
+                    onDragStart = { tracker.resetTracking() },
                     onDragEnd = {
-                        if (!settling) {
-                            val threshold = maxOf(72f, widthPx * .18f)
-                            when {
-                                dragOffset < -threshold && next != null -> settleTo(1)
-                                dragOffset > threshold && previous != null -> settleTo(-1)
-                                else -> settleTo(0)
-                            }
+                        if (!removing) {
+                            val velocityY = tracker.calculateVelocity().y
+                            if (liftY < -heightPx * .22f || (velocityY < -1800f && liftY < -48f)) trashCurrent() else springBack()
                         }
                     },
-                    onDragCancel = { if (!settling) settleTo(0) },
-                    onHorizontalDrag = { change, amount ->
-                        change.consume()
-                        if (!settling) {
-                            val pullingPastEdge = (dragOffset > 0f && previous == null) || (dragOffset < 0f && next == null)
-                            val resistance = if (pullingPastEdge) .22f else 1f
-                            dragOffset = (dragOffset + amount * resistance).coerceIn(-widthPx, widthPx)
+                    onDragCancel = { if (!removing) springBack() },
+                    onVerticalDrag = { change, amount ->
+                        if (!removing && !pagerState.isScrollInProgress) {
+                            change.consume()
+                            tracker.addPosition(change.uptimeMillis, change.position)
+                            // Upward drags follow the finger; downward drags get heavy resistance.
+                            liftY = (liftY + if (liftY + amount > 0f) amount * .2f else amount).coerceIn(-heightPx, heightPx * .15f)
                         }
                     }
                 )
             }
         ) {
-            if (previous != null) {
-                GalleryImage(
-                    previous.uri,
-                    previous.name,
-                    Modifier.fillMaxSize().offset { IntOffset((dragOffset - widthPx).roundToInt(), 0) },
-                    ContentScale.Fit
-                )
+            HorizontalPager(
+                state = pagerState,
+                key = { photos.getOrNull(it)?.id ?: it },
+                beyondViewportPageCount = 1,
+                userScrollEnabled = !removing && liftY == 0f,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                photos.getOrNull(page)?.let { item ->
+                    ViewerItem(
+                        item,
+                        Modifier.fillMaxSize().graphicsLayer {
+                            if (page == pagerState.currentPage) {
+                                val progress = (-liftY / heightPx).coerceIn(0f, 1f)
+                                translationY = liftY
+                                alpha = 1f - progress * .6f
+                                scaleX = 1f - progress * .12f
+                                scaleY = 1f - progress * .12f
+                            }
+                        },
+                        onPlay = { onPlay(item) }
+                    )
+                }
             }
-            if (next != null) {
-                GalleryImage(
-                    next.uri,
-                    next.name,
-                    Modifier.fillMaxSize().offset { IntOffset((widthPx + dragOffset).roundToInt(), 0) },
-                    ContentScale.Fit
-                )
-            }
-            GalleryImage(
-                photo.uri,
-                photo.name,
-                Modifier.fillMaxSize().offset { IntOffset(dragOffset.roundToInt(), 0) },
-                ContentScale.Fit
-            )
+        }
+        val liftProgress = (-liftY / (heightPx * .22f)).coerceIn(0f, 1f)
+        if (liftProgress > 0f) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 72.dp).size(64.dp)
+                    .graphicsLayer { alpha = liftProgress; scaleX = .7f + liftProgress * .3f; scaleY = .7f + liftProgress * .3f }
+                    .clip(CircleShape).background(if (liftProgress >= 1f) Coral else Color.Black.copy(.5f)),
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Rounded.DeleteOutline, "Release to move to bin", tint = Color.White, modifier = Modifier.size(30.dp)) }
         }
         Row(
             Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 10.dp, vertical = 8.dp),
@@ -358,44 +450,39 @@ internal fun PhotoDetail(initialPhoto: Photo, photos: List<Photo>, onClose: () -
             }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(photo.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                Text("${index + 1} of ${photos.size}", color = Color.White.copy(.72f), fontSize = 12.sp)
+                Text("${currentIndex + 1} of ${photos.size}", color = Color.White.copy(.72f), fontSize = 12.sp)
             }
-            IconButton(onClick = { onTrash(photo) }, modifier = Modifier.clip(CircleShape).background(Color.Black.copy(.38f))) {
+            IconButton(onClick = { if (!pagerState.isScrollInProgress) trashCurrent() }, modifier = Modifier.clip(CircleShape).background(Color.Black.copy(.38f))) {
                 Icon(Icons.Rounded.DeleteOutline, "Move to trash", tint = Color.White)
             }
         }
-        if (index > 0) {
-            IconButton(onClick = { settleTo(-1) }, modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).clip(CircleShape).background(Color.Black.copy(.38f))) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Previous photo", tint = Color.White)
+        if (currentIndex > 0) {
+            IconButton(onClick = { scope.launch { pagerState.animateScrollToPage(currentIndex - 1) } }, modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).clip(CircleShape).background(Color.Black.copy(.38f))) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Previous", tint = Color.White)
             }
         }
-        if (index < photos.lastIndex) {
-            IconButton(onClick = { settleTo(1) }, modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).clip(CircleShape).background(Color.Black.copy(.38f))) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowForward, "Next photo", tint = Color.White)
+        if (currentIndex < photos.lastIndex) {
+            IconButton(onClick = { scope.launch { pagerState.animateScrollToPage(currentIndex + 1) } }, modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).clip(CircleShape).background(Color.Black.copy(.38f))) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowForward, "Next", tint = Color.White)
             }
         }
-        Text(
-            SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(photo.date * 1000)),
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().background(Color.Black.copy(.35f)).padding(vertical = 16.dp),
-            color = Color.White.copy(.85f), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center
-        )
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(.35f)).navigationBarsPadding().padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(photo.date * 1000)) +
+                    if (photo.isVideo && photo.durationMs > 0) "  ·  ${formatDuration(photo.durationMs)}" else "",
+                color = Color.White.copy(.85f), fontSize = 12.sp
+            )
+            Text("SWIPE UP TO DELETE", color = Color.White.copy(.5f), fontSize = 9.sp, letterSpacing = 1.1.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
 @Composable
 internal fun BottomBar(page: Page, onPage: (Page) -> Unit) {
-    val context = LocalContext.current
-    @Suppress("DEPRECATION")
-    val appVersion = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0" }
     Column(Modifier.fillMaxWidth().background(Card)) {
-        Column(Modifier.fillMaxWidth().padding(top = 7.dp, bottom = 3.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Version $appVersion", fontSize = 9.sp, color = Muted)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Made with", fontSize = 10.sp, color = Muted)
-                Icon(Icons.Rounded.Favorite, "Love", tint = Color(0xFFE45167), modifier = Modifier.padding(horizontal = 4.dp).size(12.dp))
-                Text("by Nitesh K Jain", fontSize = 10.sp, color = Muted)
-            }
-        }
         NavigationBar(containerColor = Card, tonalElevation = 0.dp, windowInsets = WindowInsets.navigationBars) {
             val entries = listOf(Triple(Page.Photos, Icons.Rounded.GridView, "Photos"), Triple(Page.Albums, Icons.Rounded.Album, "Albums"), Triple(Page.Swipe, Icons.Rounded.Swipe, "Sort"), Triple(Page.Trash, Icons.Rounded.DeleteOutline, "Bin"))
             entries.forEach { (target, icon, label) ->
@@ -406,16 +493,37 @@ internal fun BottomBar(page: Page, onPage: (Page) -> Unit) {
 }
 
 @Composable
-internal fun PermissionEmpty(onGrant: () -> Unit) {
-    EmptyState(Icons.Rounded.Image, "Your memories, together", "Allow access to your photos to browse albums, sort favorites, and tidy up.", onGrant)
+internal fun PermissionEmpty(blocked: Boolean, onGrant: () -> Unit, onOpenSettings: () -> Unit) {
+    if (blocked) {
+        EmptyState(
+            Icons.Rounded.Image,
+            "Photo access is off",
+            "Android won't ask again from inside the app. Open Settings, tap Permissions › Photos and videos, and choose Allow.",
+            onOpenSettings,
+            actionLabel = "Open settings",
+            secondaryLabel = "Try again",
+            secondaryAction = onGrant
+        )
+    } else {
+        EmptyState(Icons.Rounded.Image, "Your memories, together", "Allow access to your photos and videos to browse albums, sort favorites, and tidy up.", onGrant)
+    }
 }
 
 @Composable
-internal fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, body: String, action: (() -> Unit)?) {
+internal fun EmptyState(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    body: String,
+    action: (() -> Unit)?,
+    actionLabel: String = "Allow photo access",
+    secondaryLabel: String? = null,
+    secondaryAction: (() -> Unit)? = null,
+) {
     Column(Modifier.fillMaxSize().padding(30.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box(Modifier.size(78.dp).clip(CircleShape).background(Color(0xFFE6EFE9)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Green, modifier = Modifier.size(34.dp)) }
         Spacer(Modifier.height(20.dp)); Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink)
         Spacer(Modifier.height(8.dp)); Text(body, color = Muted, fontSize = 14.sp, lineHeight = 21.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-        if (action != null) { Spacer(Modifier.height(18.dp)); Button(onClick = action, colors = ButtonDefaults.buttonColors(containerColor = Green), shape = RoundedCornerShape(14.dp)) { Text("Allow photo access") } }
+        if (action != null) { Spacer(Modifier.height(18.dp)); Button(onClick = action, colors = ButtonDefaults.buttonColors(containerColor = Green), shape = RoundedCornerShape(14.dp)) { Text(actionLabel) } }
+        if (secondaryLabel != null && secondaryAction != null) { TextButton(onClick = secondaryAction) { Text(secondaryLabel, color = Green) } }
     }
 }
